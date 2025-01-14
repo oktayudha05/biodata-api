@@ -12,6 +12,7 @@ func main(){
 	mahasiswa := router.Group("/mahasiswa")
 	{
 		mahasiswa.GET("/", controller.GetMhs)
+		mahasiswa.POST("/", controller.PostMhs)
 	}
 
 	router.Run(":3000")

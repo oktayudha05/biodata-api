@@ -3,6 +3,8 @@ package controller
 import (
 	"fmt"
 	"net/http"
+	"strings"
+	"sync"
 
 	"biodata-server/database"
 	"biodata-server/models"
@@ -23,10 +25,24 @@ func GetMhs(c *gin.Context){
 		c.JSON(http.StatusInternalServerError, gin.H{"message": "gagal mendapatkan mahasiswa dari database"})
 		return
 	}
-	if cur.Next(ctx) {
-		var mahasiswa models.MahasiswaPub
-		cur.Decode(&mahasiswa)
-		storeMhs = append(storeMhs, mahasiswa)
+	defer cur.Close(ctx)
+	
+	for cur.Next(ctx) {
+		var mahasiswa models.MahasiswaPriv
+		err := cur.Decode(&mahasiswa)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"message": "Gagal decode data mahasiswa"})
+      return
+		}
+		storeMhs = append(storeMhs, models.MahasiswaPub{
+			Nama: mahasiswa.Nama,
+			Npm: mahasiswa.Npm,
+			Angkatan: mahasiswa.Angkatan,
+			Alamat: mahasiswa.Alamat,
+			NoHp: mahasiswa.NoHp,
+			NoHpKeluarga: mahasiswa.NoHpKeluarga,
+			AsalSekolah: mahasiswa.AsalSekolah,
+		})
 	}
 	if len(storeMhs) == 0 {
 		c.JSON(http.StatusNoContent, gin.H{"message": "data belum ada"})
@@ -40,27 +56,55 @@ func PostMhs(c *gin.Context){
 	var mahasiswa models.MahasiswaPriv
 	err := c.BindJSON(&mahasiswa)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, "Gagal bind data")
-		return
-	}
-	err = validate.Struct(mahasiswa)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, "Data tidak sesuai format")
+		c.JSON(http.StatusInternalServerError, gin.H{"message": "Gagal bind data"})
 		return
 	}
 
-	fillCariMhs := bson.M{
-		"$or": []bson.M{
-			{"username": mahasiswa.Username},
-			{"npm": mahasiswa.Npm},
-		},
+	err = validate.Struct(mahasiswa)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "Data tidak sesuai format"})
+		return
 	}
-	result := collMhs.FindOne(ctx, fillCariMhs)
-	if result.Err() == nil {
-		message := fmt.Sprintf("akun dengan npm %s sudah ada", mahasiswa.Npm)
+
+	var konflik []string
+	var wg sync.WaitGroup
+	var mut sync.Mutex
+	wg.Add(3)
+	go func() {
+		defer wg.Done()
+		err := collMhs.FindOne(ctx, bson.M{"mahasiswapub.npm": mahasiswa.Npm}).Err()
+		if err == nil {
+			mut.Lock()
+			konflik = append(konflik, "npm")
+			mut.Unlock()
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		err := collMhs.FindOne(ctx, bson.M{"username": mahasiswa.Username}).Err()
+		if err == nil {
+			mut.Lock()
+			konflik = append(konflik, "username")
+			mut.Unlock()
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		err := collMhs.FindOne(ctx, bson.M{"mahasiswapub.nama": mahasiswa.Nama}).Err()
+		if err == nil {
+			mut.Lock()
+			konflik = append(konflik, "nama")
+			mut.Unlock()
+	}
+	}()
+	wg.Wait()
+
+	if len(konflik) > 0 {
+		message := fmt.Sprintf("akun dengan %s tersebur sudah terdaftar", strings.Join(konflik, ", "))
 		c.JSON(http.StatusConflict, gin.H{"message": message})
 		return
 	}
+
 	_, err = collMhs.InsertOne(ctx, mahasiswa)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": "Gagal menambahkan data ke databse"})
