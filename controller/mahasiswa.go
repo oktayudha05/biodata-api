@@ -8,6 +8,7 @@ import (
 
 	"biodata-server/database"
 	"biodata-server/models"
+	"biodata-server/utils"
 
 	"github.com/go-playground/validator/v10"
 	"go.mongodb.org/mongo-driver/bson"
@@ -59,6 +60,12 @@ func PostMhs(c *gin.Context){
 		c.JSON(http.StatusInternalServerError, gin.H{"message": "Gagal bind data"})
 		return
 	}
+	hashPassword, err := utils.HashPassword(mahasiswa.Password)
+	if err != nil {
+		c.JSON(http.StatusConflict, gin.H{"message": "gagal hash password"})
+		return
+	}
+	mahasiswa.Password = hashPassword
 
 	err = validate.Struct(mahasiswa)
 	if err != nil {
